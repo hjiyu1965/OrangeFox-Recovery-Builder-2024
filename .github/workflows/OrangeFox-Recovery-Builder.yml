@@ -107,13 +107,33 @@ jobs:
         cd ${{ github.event.inputs.DEVICE_PATH }}
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
+    - name: Verify Device Tree
+      run: |
+        DEVICE_DIR="${{ github.event.inputs.DEVICE_PATH }}"
+        cd "$HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "::group::Device Tree Contents"
+        echo "Checking: $DEVICE_DIR"
+        if [ -d "$DEVICE_DIR" ]; then
+          ls -la "$DEVICE_DIR"
+          echo "---"
+          echo "Critical files:"
+          [ -f "$DEVICE_DIR/BoardConfig.mk" ] && echo "✓ BoardConfig.mk" || echo "✗ BoardConfig.mk MISSING"
+          [ -f "$DEVICE_DIR/device.mk" ] && echo "✓ device.mk" || echo "✗ device.mk MISSING"
+          [ -f "$DEVICE_DIR/vendorsetup.sh" ] && echo "✓ vendorsetup.sh" || echo "✗ vendorsetup.sh MISSING"
+          [ -f "$DEVICE_DIR/Android.mk" ] && echo "✓ Android.mk" || echo "✗ Android.mk MISSING"
+        else
+          echo "✗ Device directory does not exist!"
+          exit 1
+        fi
+        echo "::endgroup::"
+
     - name: Check Manifest Branch
       uses: haya14busa/action-cond@v1
       id: fox_branch
       with:
         cond: ${{ github.event.inputs.MANIFEST_BRANCH == '11.0' || github.event.inputs.MANIFEST_BRANCH == '12.1' }}
-        if_true: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image
-        if_false: lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka ${{ github.event.inputs.BUILD_TARGET }}image
+        if_true: lunch twrp_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka adbd recoveryimage
+        if_false: lunch omni_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && mka recoveryimage
       
     - name: Building OrangeFox
       run: |
@@ -122,7 +142,47 @@ jobs:
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         set -e
+        
+        echo "::group::Build Command"
+        echo "Executing: ${{ steps.fox_branch.outputs.value }}"
+        echo "::endgroup::"
+        
         ${{ steps.fox_branch.outputs.value }}
+        BUILD_STATUS=$?
+        
+        echo "::group::Build Result"
+        echo "Build exit code: $BUILD_STATUS"
+        echo "::endgroup::"
+        
+        if [ $BUILD_STATUS -ne 0 ]; then
+          echo "⚠️ Build returned non-zero exit code, but continuing to check for output..."
+        fi
+
+    - name: Debug: Check Build Output
+      if: always()
+      run: |
+        cd $HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        echo "::group::Output Directory Tree"
+        echo "Looking for recovery images..."
+        
+        # Search for any .img files
+        find out -name "*.img" 2>/dev/null | head -20 || echo "No .img files found"
+        
+        # Check expected paths
+        echo ""
+        echo "Expected path 1:"
+        ls -la out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox* 2>/dev/null || echo "  Not found"
+        
+        echo ""
+        echo "Expected path 2:"
+        ls -la out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox* 2>/dev/null || echo "  Not found"
+        
+        # Check disk usage
+        echo ""
+        echo "Disk usage of out/:"
+        du -sh out/ 2>/dev/null || echo "  Could not determine"
+        
+        echo "::endgroup::"
 
     - name: Set Build Date # Output will be use in Release
       run: |
@@ -136,18 +196,32 @@ jobs:
     - name: Check if Recovery Exist
       run: |
         cd $HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        
+        echo "::group::Recovery File Check"
+        
         if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
+            echo "✓ Found recovery in path 1"
             echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
             echo "FILE_PATH=$HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
             echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
         elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
+            echo "✓ Found recovery in path 2"
             echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
             echo "FILE_PATH=$HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
             echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
         else
-            echo "Recovery out directory is empty."
+            echo "✗ Recovery out directory is empty."
+            echo "::endgroup::"
+            echo ""
+            echo "❌ BUILD FAILED: No recovery.img found"
+            echo "Possible causes:"
+            echo "1. Device tree configuration incomplete"
+            echo "2. Build environment error"
+            echo "3. Missing device dependencies"
             exit 1
         fi
+        
+        echo "::endgroup::"
 
     - name: Rename the Recovery
       run: |
