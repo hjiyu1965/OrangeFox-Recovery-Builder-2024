@@ -116,7 +116,7 @@ jobs:
         if [ -d "$DEVICE_DIR" ]; then
           ls -la "$DEVICE_DIR"
           echo "---"
-          echo "Critical files:"
+          echo "Critical files check:"
           [ -f "$DEVICE_DIR/BoardConfig.mk" ] && echo "✓ BoardConfig.mk" || echo "✗ BoardConfig.mk MISSING"
           [ -f "$DEVICE_DIR/device.mk" ] && echo "✓ device.mk" || echo "✗ device.mk MISSING"
           [ -f "$DEVICE_DIR/vendorsetup.sh" ] && echo "✓ vendorsetup.sh" || echo "✗ vendorsetup.sh MISSING"
@@ -152,30 +152,36 @@ jobs:
         
         echo "::group::Build Result"
         echo "Build exit code: $BUILD_STATUS"
-        echo "::endgroup::"
-        
         if [ $BUILD_STATUS -ne 0 ]; then
-          echo "⚠️ Build returned non-zero exit code, but continuing to check for output..."
+          echo "⚠️  Build command returned exit code: $BUILD_STATUS"
         fi
+        echo "::endgroup::"
 
-    - name: Debug: Check Build Output
+    - name: Debug - Check Build Output
       if: always()
       run: |
         cd $HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        echo "::group::Output Directory Tree"
-        echo "Looking for recovery images..."
+        echo "::group::Build Output Diagnostics"
+        echo "Searching for recovery images..."
         
         # Search for any .img files
-        find out -name "*.img" 2>/dev/null | head -20 || echo "No .img files found"
+        echo ""
+        echo "All .img files found:"
+        find out -name "*.img" 2>/dev/null | head -20 || echo "  No .img files found"
         
         # Check expected paths
         echo ""
-        echo "Expected path 1:"
+        echo "Path 1 check: out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img"
         ls -la out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox* 2>/dev/null || echo "  Not found"
         
         echo ""
-        echo "Expected path 2:"
+        echo "Path 2 check: out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img"
         ls -la out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox* 2>/dev/null || echo "  Not found"
+        
+        # Check out directory structure
+        echo ""
+        echo "Output directory structure:"
+        ls -la out/target/product/${{ github.event.inputs.DEVICE_NAME }}/ 2>/dev/null | head -20 || echo "  Directory not found"
         
         # Check disk usage
         echo ""
@@ -184,7 +190,7 @@ jobs:
         
         echo "::endgroup::"
 
-    - name: Set Build Date # Output will be use in Release
+    - name: Set Build Date
       run: |
         echo "BUILD_DATE=$(date +%Y%m%d)" >> $GITHUB_ENV
         DEVICE_TREE_URL="${{ github.event.inputs.DEVICE_TREE }}"
@@ -200,24 +206,27 @@ jobs:
         echo "::group::Recovery File Check"
         
         if [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
-            echo "✓ Found recovery in path 1"
+            echo "✓ Found recovery in standard path"
             echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
             echo "FILE_PATH=$HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
             echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
         elif [ -f out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img ]; then
-            echo "✓ Found recovery in path 2"
+            echo "✓ Found recovery in alternate path"
             echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
             echo "FILE_PATH=$HOME/OrangeFox/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_ENV
             echo "MD5_IMG=$(md5sum out/target/product/${{ github.event.inputs.DEVICE_NAME }}/target/product/${{ github.event.inputs.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
         else
-            echo "✗ Recovery out directory is empty."
+            echo "✗ Recovery output directory is empty"
             echo "::endgroup::"
             echo ""
-            echo "❌ BUILD FAILED: No recovery.img found"
+            echo "::error::BUILD FAILED - recovery.img not generated"
+            echo ""
             echo "Possible causes:"
-            echo "1. Device tree configuration incomplete"
-            echo "2. Build environment error"
-            echo "3. Missing device dependencies"
+            echo "1. Device tree configuration is incomplete or incorrect"
+            echo "2. Missing BoardConfig.mk or device.mk files"
+            echo "3. Build environment error (check logs above)"
+            echo "4. Insufficient disk space"
+            echo "5. Device codename mismatch"
             exit 1
         fi
         
